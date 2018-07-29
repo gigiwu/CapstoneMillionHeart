@@ -1,0 +1,245 @@
+---
+title: "Capstone Project:Predicting Heart Disease Mortality"
+author: "Chihua Wu"
+output:
+  html_document: default
+  html_notebook: default
+  pdf_document: default
+---
+
+### Executive Summary
+This report is to present how a model is built to predict the level of damage to buildings caused by the 2015 Gorkha earthquake in Nepal, based on aspects of building location and construction condition.
+
+Given the nature of data, we chose to approach this problem by tree-type of model. After experimenting with different type of tree strategies, we found **Random Forest** performed the best.
+
+Among all 38 predictors presented in the original dataset, our Random Forest model indicates that across all of the tree considered, **geographical location**(level 1 to 3), followed by  **construction conditions** such as (*area*, *age*, *height*, *foundation type*...) are the most important features to predict the damage_grade, compared to community informations such as *has_secondary_use_school*, which is very intuitive.
+
+
+
+```{r step1, echo=FALSE, eval=FALSE, warning=FALSE, message=FALSE}
+#hidden
+
+# setpath
+getwd()
+setwd('G:/Training/Capstone_MillionHearts')
+
+# remove objects
+rm(list = ls())
+```
+## Dataset
+
+We will begin by examining some numerical and graphical summaries of training data.
+
+```{r echo=FALSE, result="hide", warning=FALSE, message=FALSE}
+# Load library
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(tree)
+
+# Read data file
+train_value <- read.csv("DAT102x_Predicting_Heart_Disease_Mortality_-_Training_values.csv", stringsAsFactors = TRUE, na.strings = "")
+train_label <- read.csv("DAT102x_Predicting_Heart_Disease_Mortality_-_Training_labels.csv", stringsAsFactors = TRUE, na.strings = "")
+test <- read.csv("DAT102x_Predicting_Heart_Disease_Mortality_-_Test_values.csv", stringsAsFactors = TRUE, na.strings = "")
+str(train_label)
+train <- train_value %>% inner_join(train_label, by=c("row_id","row_id"))
+```
+
+
+```{r}
+dim(train)
+```
+
+This dataset consists of 32 features of 3198 rows
+The response, **heart_disease_mortality_per_100k**,has roughly normal distribution ranging from 100 to 500.
+
+
+```{r}
+hist(train$heart_disease_mortality_per_100k, main="heart_disease_mortality_per_100k")
+```
+
+Then, we inspect numerical summary of each variable in the dataset.
+```{r}
+summary(train)
+```
+
+
+
+
+## Data cleansing
+
+We found there are many NA cells in our table. So try to put reasonable value.
+
+```{r result="hide"}
+
+myClean<-function(df){
+
+  # transform data
+  df$geo_level_1_id <- as.factor(df$geo_level_1_id)
+  #df$geo_level_3_id <- as.factor(df$geo_level_3_id)
+  df$geo_level_2_id <- as.integer(df$geo_level_2_id)
+  if("damage_grade" %in% colnames(df))df$damage_grade <- as.factor(df$damage_grade)
+  
+  
+  for(i in grep('^has',names(df))){
+    df[,i] = as.factor(df[,i])
+  }
+  
+  return(df)
+}
+
+```
+
+
+## Fitting Regression Tree
+
+we decide to choose tree-base approach to build the model.
+
+From this section, we will experimenting on several method and find the one with highest performance.
+
+
+We will start from fitting **a single regression tree** in order to predict **heart_disease_mortality_per_100k** using these 32 features.
+
+```{r}
+set.seed(27)
+tree.heart = tree(heart_disease_mortality_per_100k ~ .-row_id, data = train)
+summary(tree.heart)
+
+```
+
+As a result, We got training error as 37.82%.
+
+In order to properly estimate performance of the model, we must test on test data.
+
+```{r}
+set.seed(27)
+train_sample = sample(1:nrow(train),nrow(train)*0.9)
+train_test = train[-train_sample,]
+
+tree.heart = tree(heart_disease_mortality_per_100k ~ .-row_id, data = train, subset=train_sample)
+summary(tree.heart)
+```
+
+We found that only four of the variables have been used in constructing the tree.
+We now plot the tree.
+```{r}
+
+plot(tree.heart,type=c("uniform"))
+text(tree.heart,cex=0.8, srt = 5)
+
+```
+
+Now we use cv.tree to see whether prunning the tree will improve performance.
+
+```{r}
+cv.heart = cv.tree(tree.heart)
+plot(cv.heart$size, cv.heart$dev, type='b')
+```
+
+In keeping with the cross-validation results, we use the unpruned tree to make predictions on the test set. 
+```{r}
+yhat = predict(tree.heart, train_test)
+heart.test = train_test[, "heart_disease_mortality_per_100k"]
+plot(yhat, heart.test)
+abline(0,1)
+mean((yhat-heart.test)^2)
+```
+In other words., the test set MSE associated with the regression tree is 2510.667. The square root of the MSE is therfore around 50, indicatting that this model leads to test predictions that are within around 50 o f the true median value.
+
+We then try other tree method.
+
+
+## Fitting Bagging and Random Forest
+
+We fit bagging by making `mtry = 32`, meaning all predictors should be considered for each split of the tree.
+```{r}
+library(randomForest)
+set.seed(1)
+
+bag.heart = randomForest(heart_disease_mortality_per_100k ~ .-row_id, data= train, subset = train_sample, mtry=32, importance=TRUE)
+bag.heart
+```
+
+Let's see how well does Bagging perform?
+```{r}
+bag.nepal.pred = predict(bag.nepal, newdata = train_1000, type="class")
+table(bag.nepal.pred, train.test.label)
+```
+Now we get accuracy
+```{r}
+(25+440+179) / (25+35+2+45+440+147+2+125+179)
+```
+
+The accuracy is dropped. but we can see precision of grade 1 and 3 are improved. However, recall and precision of grade 2 is worse.
+
+We then modify mtry = 6, approximately square-root of 38, which is usually adoptted for classification random forest.
+
+```{r}
+set.seed(1)
+str(train)
+rf.nepal = randomForest(damage_grade ~ .-building_id, data= train, subset = train_9000, mtry=6, importance=TRUE)
+rf.nepal
+plot(rf.nepal,log="y")
+varImpPlot(rf.nepal, cex=0.7, main="Importance of Feature")
+```
+
+Let's see how well does Random Forest perform?
+```{r}
+rf.nepal.pred = predict(rf.nepal, newdata = train_1000, type="class")
+table(rf.nepal.pred, train.test.label)
+```
+Now we get accuracy
+```{r}
+(28+478+167) / (28+25+0+44+478+161+0+97+167)
+(21+475+183) / (27+23+0+44+475+145+1+102+183)
+```
+
+We reached the highest accuracy so far.
+Among all 38 predictors presented in the original dataset, our Random Forest model indicates that across all of the tree considered, *geographical location*(level 1 to 3), followed by  *construction conditions* such as (*area*, *age*, *height*, *foundation type*...) are the most important features to predict the damage_grade, compared to community informations such as *has_secondary_use_school*, which is very intuitive and matched our assumption at data exploring stage.
+
+
+```{r echo=FALSE, eval=FALSE, warning=FALSE, message=FALSE}
+#make result
+rf.nepal.test.pred = predict(rf.nepal, newdata =test.clean, type="class")
+result = data.frame('building_id' =test.clean$building_id, 'damage_grade' = rf.nepal.test.pred)
+write.csv(result, file="randomForest.csv", quote=FALSE, row.names = FALSE)
+
+```
+
+## Fitting Boosting Tree
+
+
+```{r}
+library(gbm)
+
+boost.nepal = gbm(damage_grade ~ .-building_id, data= train[train_9000,], distribution="multinomial", n.trees = 5000, shrinkage = 0.001)
+summary(boost.nepal)
+```
+
+Now we use this model to predict test data
+```{r}
+boost.nepal.pred = predict(boost.nepal, newdata =train_1000,  n.trees = 5000, type="response")
+
+
+p.predBST <- apply(boost.nepal.pred, 1, which.max)
+table(p.predBST, train.test.label)
+?gbm
+```
+
+Let's check accuracy
+
+```{r}
+(17+479+165)/(17+18+0+55+479+163+0+103+165) #5000,0.001
+```
+
+but precision and recall of grade 1 is zero.
+
+## Conclusion
+
+We decided to approach the problem by tree method given the data itself has tree structure (geo level). Also, the data is structured.
+
+After experimenting with serveral candidates, We select Random Forest as our final model based on two main reasons:
+
+- The highes accuracy so far
+- Resonable feature ranking
+
